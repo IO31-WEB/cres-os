@@ -12,11 +12,6 @@ const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/api/webhooks(.*)',
-  // Machine-to-machine endpoints — no Clerk session available. Each checks
-  // its own shared secret inside the route handler (see LEAD_INTAKE_SECRET
-  // and CRON_SECRET in docs/MODULE_8_SETUP.md / MODULE_9_SETUP.md).
-  '/api/leads/inbound',
-  '/api/cron(.*)',
 ])
 
 export default clerkMiddleware(async (auth, request) => {
