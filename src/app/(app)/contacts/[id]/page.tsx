@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { eq } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { Pencil, Mail, Phone, MessageCircle } from 'lucide-react'
 import { db } from '@/lib/db'
 import { contacts, companies, deals } from '@/lib/db/schema'
@@ -9,11 +9,15 @@ import { LeadScoreBadge } from '@/components/contacts/lead-score-badge'
 import { CONTACT_TYPE_LABELS } from '@/lib/validations/contact'
 import type { CONTACT_TYPES } from '@/lib/validations/contact'
 import { NotesSection } from '@/components/notes/notes-section'
+import { requireUser } from '@/lib/auth'
+import { canViewContact, dealsVisibleTo } from '@/lib/visibility'
 
 export default async function ContactDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const contactId = Number(id)
   if (Number.isNaN(contactId)) notFound()
+
+  const user = await requireUser()
 
   const [row] = await db
     .select({ contact: contacts, companyName: companies.name })
@@ -24,8 +28,13 @@ export default async function ContactDetailPage({ params }: { params: Promise<{ 
 
   if (!row) notFound()
   const { contact, companyName } = row
+  if (!canViewContact(user, contact)) notFound()
 
-  const relatedDeals = await db.select().from(deals).where(eq(deals.contactId, contactId))
+  const dealVisibility = dealsVisibleTo(user)
+  const relatedDeals = await db
+    .select()
+    .from(deals)
+    .where(dealVisibility ? and(eq(deals.contactId, contactId), dealVisibility) : eq(deals.contactId, contactId))
 
   return (
     <div className="max-w-3xl">

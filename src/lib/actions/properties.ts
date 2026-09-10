@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
+import { redirect, notFound } from 'next/navigation'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { properties } from '@/lib/db/schema'
@@ -9,9 +9,16 @@ import { requireUser } from '@/lib/auth'
 import { propertySchema } from '@/lib/validations/property'
 import { parseForm, type ActionState } from '@/lib/actions/form-state'
 import { geocodeAddress } from '@/lib/data-sources/geocode'
+import { canViewProperty, defaultAssignee } from '@/lib/visibility'
 
 function orNull(value: string | undefined): string | null {
   return value && value.length > 0 ? value : null
+}
+
+async function assertCanEditProperty(user: Awaited<ReturnType<typeof requireUser>>, propertyId: number) {
+  const [property] = await db.select().from(properties).where(eq(properties.id, propertyId)).limit(1)
+  if (!property || !canViewProperty(user, property)) notFound()
+  return property
 }
 
 export async function createProperty(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -38,6 +45,9 @@ export async function createProperty(_prev: ActionState, formData: FormData): Pr
       defaultBusinessProfile: d.defaultBusinessProfile,
       listingStatus: d.listingStatus,
       ownerContactId: d.ownerContactId ? Number(d.ownerContactId) : null,
+      // Agents default to themselves so their own new property doesn't
+      // vanish behind the owners-only unassigned rule.
+      assignedToUserId: defaultAssignee(user, orNull(d.assignedToUserId)),
       sqft: d.sqft ? Number(d.sqft) : null,
       notes: orNull(d.notes),
       createdByUserId: user.id,
@@ -53,17 +63,18 @@ export async function updateProperty(
   _prev: ActionState,
   formData: FormData
 ): Promise<ActionState> {
-  await requireUser()
+  const user = await requireUser()
+  const existing = await assertCanEditProperty(user, propertyId)
+
   const parsed = parseForm(propertySchema, formData)
   if (!parsed.success) return parsed.state
 
   const d = parsed.data
-  const [existing] = await db.select().from(properties).where(eq(properties.id, propertyId)).limit(1)
 
   // Only re-geocode if the address text actually changed — avoids burning
   // a geocode call on every unrelated edit (e.g. just updating notes).
   const geo =
-    existing && existing.address !== d.address ? await geocodeAddress(d.address).catch(() => null) : null
+    existing.address !== d.address ? await geocodeAddress(d.address).catch(() => null) : null
 
   await db
     .update(properties)
@@ -76,6 +87,7 @@ export async function updateProperty(
       defaultBusinessProfile: d.defaultBusinessProfile,
       listingStatus: d.listingStatus,
       ownerContactId: d.ownerContactId ? Number(d.ownerContactId) : null,
+      assignedToUserId: orNull(d.assignedToUserId),
       sqft: d.sqft ? Number(d.sqft) : null,
       notes: orNull(d.notes),
       updatedAt: new Date(),
@@ -88,7 +100,9 @@ export async function updateProperty(
 }
 
 export async function deleteProperty(propertyId: number): Promise<void> {
-  await requireUser()
+  const user = await requireUser()
+  await assertCanEditProperty(user, propertyId)
+
   await db.delete(properties).where(eq(properties.id, propertyId))
   revalidatePath('/properties')
   redirect('/properties')

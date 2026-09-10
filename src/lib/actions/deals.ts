@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
+import { redirect, notFound } from 'next/navigation'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { deals } from '@/lib/db/schema'
@@ -9,9 +9,16 @@ import { requireUser } from '@/lib/auth'
 import { dealSchema } from '@/lib/validations/deal'
 import { parseForm, type ActionState } from '@/lib/actions/form-state'
 import { isValidStage, defaultStage } from '@/lib/pipelines'
+import { canViewDeal, defaultAssignee } from '@/lib/visibility'
 
 function orNull(value: string | undefined): string | null {
   return value && value.length > 0 ? value : null
+}
+
+async function assertCanEditDeal(user: Awaited<ReturnType<typeof requireUser>>, dealId: number) {
+  const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1)
+  if (!deal || !(await canViewDeal(user, deal))) notFound()
+  return deal
 }
 
 export async function createDeal(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -33,7 +40,10 @@ export async function createDeal(_prev: ActionState, formData: FormData): Promis
       probability: d.probability !== '' && d.probability !== undefined ? Number(d.probability) : null,
       ndaStatus: d.ndaStatus,
       expectedCloseDate: d.expectedCloseDate ? new Date(d.expectedCloseDate) : null,
-      assignedToUserId: orNull(d.assignedToUserId) ?? user.id,
+      // Agents default to themselves so their own new deal doesn't vanish
+      // behind the owners-only unassigned rule; owners can deliberately
+      // leave it unassigned.
+      assignedToUserId: defaultAssignee(user, orNull(d.assignedToUserId)),
     })
     .returning({ id: deals.id })
 
@@ -42,7 +52,9 @@ export async function createDeal(_prev: ActionState, formData: FormData): Promis
 }
 
 export async function updateDeal(dealId: number, _prev: ActionState, formData: FormData): Promise<ActionState> {
-  await requireUser()
+  const user = await requireUser()
+  await assertCanEditDeal(user, dealId)
+
   const parsed = parseForm(dealSchema, formData)
   if (!parsed.success) return parsed.state
 
@@ -72,7 +84,9 @@ export async function updateDeal(dealId: number, _prev: ActionState, formData: F
 }
 
 export async function updateDealStage(dealId: number, pipeline: string, newStage: string): Promise<void> {
-  await requireUser()
+  const user = await requireUser()
+  await assertCanEditDeal(user, dealId)
+
   if (!isValidStage(pipeline, newStage)) {
     throw new Error('Invalid stage for this pipeline')
   }
@@ -87,7 +101,9 @@ export async function updateDealStage(dealId: number, pipeline: string, newStage
 }
 
 export async function setDealStatus(dealId: number, status: 'open' | 'won' | 'lost', lostReason?: string): Promise<void> {
-  await requireUser()
+  const user = await requireUser()
+  await assertCanEditDeal(user, dealId)
+
   await db
     .update(deals)
     .set({ status, lostReason: status === 'lost' ? (lostReason ?? null) : null, updatedAt: new Date(), lastActivityAt: new Date() })
@@ -98,7 +114,9 @@ export async function setDealStatus(dealId: number, status: 'open' | 'won' | 'lo
 }
 
 export async function deleteDeal(dealId: number): Promise<void> {
-  await requireUser()
+  const user = await requireUser()
+  await assertCanEditDeal(user, dealId)
+
   await db.delete(deals).where(eq(deals.id, dealId))
   revalidatePath('/deals')
   redirect('/deals')

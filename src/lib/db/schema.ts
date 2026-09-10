@@ -109,6 +109,10 @@ export const properties = pgTable(
 
     ownerContactId: integer('owner_contact_id').references(() => contacts.id),
 
+    // Drives per-agent visibility (see lib/visibility.ts). Null = visible
+    // to owners only until assigned, same rule as contacts and deals.
+    assignedToUserId: text('assigned_to_user_id').references(() => users.id),
+
     // 'off_market' | 'active' | 'under_contract' | 'sold' | 'leased' | 'withdrawn'
     listingStatus: text('listing_status').notNull().default('off_market'),
 
@@ -195,6 +199,31 @@ export const deals = pgTable(
     pipelineStageIdx: index('deals_pipeline_stage_idx').on(table.pipeline, table.stage),
     statusIdx: index('deals_status_idx').on(table.status),
     lastActivityIdx: index('deals_last_activity_idx').on(table.lastActivityAt),
+  })
+)
+
+// ─────────────────────────────────────────────────────────────────────────
+// Deal collaborators — per-deal helper access for agents who aren't the
+// primary assignee (e.g. Susie's deal, but she adds Chad to help). This is
+// the one sharing mechanism in V1: deliberate and per-deal, not a blanket
+// team-wide visibility toggle. See lib/visibility.ts for how this is used.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const dealCollaborators = pgTable(
+  'deal_collaborators',
+  {
+    id: serial('id').primaryKey(),
+    dealId: integer('deal_id')
+      .notNull()
+      .references(() => deals.id),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    addedByUserId: text('added_by_user_id').references(() => users.id),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    dealUserIdx: uniqueIndex('deal_collaborators_deal_user_idx').on(table.dealId, table.userId),
   })
 )
 
@@ -465,6 +494,9 @@ export type NewListing = typeof listings.$inferInsert
 
 export type Deal = typeof deals.$inferSelect
 export type NewDeal = typeof deals.$inferInsert
+
+export type DealCollaborator = typeof dealCollaborators.$inferSelect
+export type NewDealCollaborator = typeof dealCollaborators.$inferInsert
 
 export type Document = typeof documents.$inferSelect
 export type NewDocument = typeof documents.$inferInsert

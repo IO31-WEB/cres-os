@@ -1,13 +1,14 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
+import { redirect, notFound } from 'next/navigation'
 import { eq, and } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { documents, deals } from '@/lib/db/schema'
+import { documents, deals, contacts, properties } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
 import { documentRecordSchema, type DOCUMENT_STATUSES } from '@/lib/validations/document'
 import { parseForm, type ActionState } from '@/lib/actions/form-state'
+import { canViewDeal, canViewContact, canViewProperty, canViewDocument } from '@/lib/visibility'
 
 export async function createDocumentRecord(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireUser()
@@ -15,6 +16,23 @@ export async function createDocumentRecord(_prev: ActionState, formData: FormDat
   if (!parsed.success) return parsed.state
 
   const d = parsed.data
+
+  // Verify access to whichever parent record this document is being
+  // attached to, so an agent can't upload a document onto a deal/contact/
+  // property they can't otherwise see.
+  if (d.dealId) {
+    const [deal] = await db.select().from(deals).where(eq(deals.id, Number(d.dealId))).limit(1)
+    if (!deal || !(await canViewDeal(user, deal))) notFound()
+  }
+  if (d.contactId) {
+    const [contact] = await db.select().from(contacts).where(eq(contacts.id, Number(d.contactId))).limit(1)
+    if (!contact || !canViewContact(user, contact)) notFound()
+  }
+  if (d.propertyId) {
+    const [property] = await db.select().from(properties).where(eq(properties.id, Number(d.propertyId))).limit(1)
+    if (!property || !canViewProperty(user, property)) notFound()
+  }
+
   await db.insert(documents).values({
     type: d.type,
     fileName: d.fileName,
@@ -32,10 +50,10 @@ export async function createDocumentRecord(_prev: ActionState, formData: FormDat
 }
 
 export async function setDocumentStatus(documentId: number, status: (typeof DOCUMENT_STATUSES)[number]): Promise<void> {
-  await requireUser()
+  const user = await requireUser()
 
   const [doc] = await db.select().from(documents).where(eq(documents.id, documentId)).limit(1)
-  if (!doc) return
+  if (!doc || !(await canViewDocument(user, doc))) notFound()
 
   const timestamps: Record<string, Date> = {}
   if (status === 'sent') timestamps.sentAt = new Date()
@@ -58,9 +76,11 @@ export async function setDocumentStatus(documentId: number, status: (typeof DOCU
 }
 
 export async function deleteDocument(documentId: number): Promise<void> {
-  await requireUser()
+  const user = await requireUser()
   const [doc] = await db.select().from(documents).where(eq(documents.id, documentId)).limit(1)
+  if (!doc || !(await canViewDocument(user, doc))) notFound()
+
   await db.delete(documents).where(eq(documents.id, documentId))
   revalidatePath('/documents')
-  if (doc?.dealId) revalidatePath(`/deals/${doc.dealId}`)
+  if (doc.dealId) revalidatePath(`/deals/${doc.dealId}`)
 }

@@ -6,12 +6,18 @@ import { commissions, deals } from '@/lib/db/schema'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Card, CardContent } from '@/components/ui/card'
+import { requireUser } from '@/lib/auth'
+import { commissionsVisibleTo } from '@/lib/visibility'
 
 export default async function CommissionsPage() {
+  const user = await requireUser()
+  const visibility = commissionsVisibleTo(user)
+
   const rows = await db
     .select({ commission: commissions, dealName: deals.name })
     .from(commissions)
     .leftJoin(deals, eq(commissions.dealId, deals.id))
+    .where(visibility)
     .orderBy(desc(commissions.createdAt))
 
   const totals = rows.reduce(

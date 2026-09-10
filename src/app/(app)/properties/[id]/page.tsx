@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { eq } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { Pencil } from 'lucide-react'
 import { db } from '@/lib/db'
 import { properties, contacts, deals } from '@/lib/db/schema'
@@ -10,11 +10,15 @@ import { PROPERTY_TYPE_LABELS, LISTING_STATUS_LABELS } from '@/lib/validations/p
 import type { PROPERTY_TYPES, LISTING_STATUSES } from '@/lib/validations/property'
 import { ScorecardHistory } from '@/components/properties/scorecard-history'
 import { NotesSection } from '@/components/notes/notes-section'
+import { requireUser } from '@/lib/auth'
+import { canViewProperty, dealsVisibleTo } from '@/lib/visibility'
 
 export default async function PropertyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const propertyId = Number(id)
   if (Number.isNaN(propertyId)) notFound()
+
+  const user = await requireUser()
 
   const [row] = await db
     .select({ property: properties, ownerName: contacts.firstName, ownerLastName: contacts.lastName })
@@ -25,8 +29,13 @@ export default async function PropertyDetailPage({ params }: { params: Promise<{
 
   if (!row) notFound()
   const { property, ownerName, ownerLastName } = row
+  if (!canViewProperty(user, property)) notFound()
 
-  const relatedDeals = await db.select().from(deals).where(eq(deals.propertyId, propertyId))
+  const dealVisibility = dealsVisibleTo(user)
+  const relatedDeals = await db
+    .select()
+    .from(deals)
+    .where(dealVisibility ? and(eq(deals.propertyId, propertyId), dealVisibility) : eq(deals.propertyId, propertyId))
 
   return (
     <div className="max-w-3xl">

@@ -29,6 +29,7 @@ export const propertySchema = z.object({
   defaultBusinessProfile: z.string().max(50).default('general'),
   listingStatus: z.enum(LISTING_STATUSES).default('off_market'),
   ownerContactId: z.coerce.number().int().positive().optional().or(z.literal('')),
+  assignedToUserId: z.string().optional().or(z.literal('')),
   sqft: z.coerce.number().int().positive().optional().or(z.literal('')),
   notes: z.string().max(5000).optional().or(z.literal('')),
 })

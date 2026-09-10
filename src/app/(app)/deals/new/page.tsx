@@ -3,6 +3,8 @@ import { contacts, companies, properties, users } from '@/lib/db/schema'
 import { DealForm } from '@/components/deals/deal-form'
 import { createDeal } from '@/lib/actions/deals'
 import { PIPELINE_IDS, type PipelineId } from '@/lib/pipelines'
+import { requireUser } from '@/lib/auth'
+import { contactsVisibleTo, propertiesVisibleTo } from '@/lib/visibility'
 
 export default async function NewDealPage({ searchParams }: { searchParams: Promise<{ pipeline?: string }> }) {
   const { pipeline } = await searchParams
@@ -10,10 +12,12 @@ export default async function NewDealPage({ searchParams }: { searchParams: Prom
     ? (pipeline as PipelineId)
     : undefined
 
+  const user = await requireUser()
+
   const [allContacts, allCompanies, allProperties, allUsers] = await Promise.all([
-    db.select().from(contacts).orderBy(contacts.firstName),
+    db.select().from(contacts).where(contactsVisibleTo(user, contacts)).orderBy(contacts.firstName),
     db.select().from(companies).orderBy(companies.name),
-    db.select().from(properties).orderBy(properties.formattedAddress),
+    db.select().from(properties).where(propertiesVisibleTo(user, properties)).orderBy(properties.formattedAddress),
     db.select().from(users).orderBy(users.name),
   ])
 

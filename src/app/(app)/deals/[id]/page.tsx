@@ -3,31 +3,47 @@ import { notFound } from 'next/navigation'
 import { eq } from 'drizzle-orm'
 import { Pencil, CheckCircle2, XCircle, ShieldCheck, Plus } from 'lucide-react'
 import { db } from '@/lib/db'
-import { deals, contacts, companies, properties, documents, commissions } from '@/lib/db/schema'
+import { deals, contacts, companies, properties, documents, commissions, dealCollaborators, users } from '@/lib/db/schema'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { setDealStatus } from '@/lib/actions/deals'
 import { PIPELINES, type PipelineId } from '@/lib/pipelines'
 import { NotesSection } from '@/components/notes/notes-section'
+import { requireUser, isOwner } from '@/lib/auth'
+import { canViewDeal } from '@/lib/visibility'
+import { DealCollaborators } from '@/components/deals/deal-collaborators'
 
 export default async function DealDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const dealId = Number(id)
   if (Number.isNaN(dealId)) notFound()
 
+  const user = await requireUser()
   const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1)
-  if (!deal) notFound()
+  if (!deal || !(await canViewDeal(user, deal))) notFound()
 
-  const [contact, company, property, docs, commission] = await Promise.all([
+  const [contact, company, property, docs, commission, collaboratorRows, allUsers] = await Promise.all([
     deal.contactId ? (await db.select().from(contacts).where(eq(contacts.id, deal.contactId)).limit(1))[0] : undefined,
     deal.companyId ? (await db.select().from(companies).where(eq(companies.id, deal.companyId)).limit(1))[0] : undefined,
     deal.propertyId ? (await db.select().from(properties).where(eq(properties.id, deal.propertyId)).limit(1))[0] : undefined,
     db.select().from(documents).where(eq(documents.dealId, dealId)),
     (await db.select().from(commissions).where(eq(commissions.dealId, dealId)).limit(1))[0],
+    db
+      .select({ user: users })
+      .from(dealCollaborators)
+      .innerJoin(users, eq(dealCollaborators.userId, users.id))
+      .where(eq(dealCollaborators.dealId, dealId)),
+    db.select().from(users).orderBy(users.name),
   ])
 
   const hasSignedNda = docs.some((doc) => doc.type === 'nda' && doc.status === 'signed')
   const boundSetStatus = setDealStatus.bind(null, dealId)
+
+  const collaborators = collaboratorRows.map((r) => r.user)
+  const canManageCollaborators = isOwner(user) || deal.assignedToUserId === user.id
+  const addableUsers = allUsers.filter(
+    (u) => u.id !== deal.assignedToUserId && !collaborators.some((c) => c.id === u.id)
+  )
 
   return (
     <div className="max-w-3xl">
@@ -129,6 +145,13 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
           )}
         </div>
       </div>
+
+      <DealCollaborators
+        dealId={deal.id}
+        collaborators={collaborators}
+        addableUsers={addableUsers}
+        canManage={canManageCollaborators}
+      />
 
       <div className="mb-6">
         <div className="mb-2 flex items-center justify-between">

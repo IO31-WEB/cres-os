@@ -5,17 +5,20 @@ import { commissions, deals } from '@/lib/db/schema'
 import { CommissionForm } from '@/components/commissions/commission-form'
 import { updateCommission, deleteCommission } from '@/lib/actions/commissions'
 import { Button } from '@/components/ui/button'
+import { requireUser } from '@/lib/auth'
+import { canViewDeal } from '@/lib/visibility'
 
 export default async function EditCommissionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const commissionId = Number(id)
   if (Number.isNaN(commissionId)) notFound()
 
+  const user = await requireUser()
   const [commission] = await db.select().from(commissions).where(eq(commissions.id, commissionId)).limit(1)
   if (!commission) notFound()
 
   const [deal] = await db.select().from(deals).where(eq(deals.id, commission.dealId)).limit(1)
-  if (!deal) notFound()
+  if (!deal || !(await canViewDeal(user, deal))) notFound()
 
   const boundUpdate = updateCommission.bind(null, commissionId)
   const boundDelete = deleteCommission.bind(null, commissionId, deal.id)

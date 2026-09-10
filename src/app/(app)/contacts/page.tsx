@@ -8,6 +8,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { LeadScoreBadge } from '@/components/contacts/lead-score-badge'
 import { CONTACT_TYPE_LABELS } from '@/lib/validations/contact'
 import type { CONTACT_TYPES, LEAD_SCORES } from '@/lib/validations/contact'
+import { requireUser, isOwner } from '@/lib/auth'
+import { contactsVisibleTo } from '@/lib/visibility'
 
 export default async function ContactsPage({
   searchParams,
@@ -15,9 +17,12 @@ export default async function ContactsPage({
   searchParams: Promise<{ leadScore?: string }>
 }) {
   const { leadScore } = await searchParams
+  const user = await requireUser()
 
   const filters: SQL[] = []
   if (leadScore) filters.push(eq(contacts.leadScore, leadScore))
+  const visibility = contactsVisibleTo(user, contacts)
+  if (visibility) filters.push(visibility)
 
   const rows = await db
     .select({ contact: contacts, companyName: companies.name })
@@ -28,11 +33,11 @@ export default async function ContactsPage({
 
   const scores: (typeof LEAD_SCORES)[number][] = ['hot', 'warm', 'nurture', 'unqualified']
 
-  const [{ pendingCount }] = await db
-    .select({ pendingCount: leadIntakes.id })
-    .from(leadIntakes)
-    .where(ne(leadIntakes.status, 'converted'))
-    .then((r) => [{ pendingCount: r.length }])
+  // Pending leads are unassigned by definition, so — same rule as any
+  // other unassigned record — only owners see the inbox count/link.
+  const pendingCount = isOwner(user)
+    ? (await db.select({ id: leadIntakes.id }).from(leadIntakes).where(ne(leadIntakes.status, 'converted'))).length
+    : 0
 
   return (
     <div>

@@ -1,12 +1,18 @@
 import { desc, ne } from 'drizzle-orm'
 import { Inbox } from 'lucide-react'
+import { notFound } from 'next/navigation'
 import { db } from '@/lib/db'
 import { leadIntakes } from '@/lib/db/schema'
 import { EmptyState } from '@/components/ui/empty-state'
+import { requireUser, isOwner } from '@/lib/auth'
 import { RetryClassificationButton } from '@/components/leads/retry-classification-button'
 import type { LeadIntakePayload } from '@/lib/validations/lead-intake'
 
 export default async function PendingLeadsPage() {
+  const user = await requireUser()
+  // Pending leads are unassigned by definition — same owners-only rule as
+  // any other unassigned record — so agents never land here at all.
+  if (!isOwner(user)) notFound()
   const rows = await db
     .select()
     .from(leadIntakes)

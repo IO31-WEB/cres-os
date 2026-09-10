@@ -1,20 +1,27 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
+import { redirect, notFound } from 'next/navigation'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { contacts } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
 import { contactSchema } from '@/lib/validations/contact'
-import { parseForm, EMPTY_STATE, type ActionState } from '@/lib/actions/form-state'
+import { parseForm, type ActionState } from '@/lib/actions/form-state'
+import { canViewContact, defaultAssignee } from '@/lib/visibility'
 
 function orNull(value: string | undefined): string | null {
   return value && value.length > 0 ? value : null
 }
 
+async function assertCanEditContact(user: Awaited<ReturnType<typeof requireUser>>, contactId: number) {
+  const [contact] = await db.select().from(contacts).where(eq(contacts.id, contactId)).limit(1)
+  if (!contact || !canViewContact(user, contact)) notFound()
+  return contact
+}
+
 export async function createContact(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  await requireUser()
+  const user = await requireUser()
   const parsed = parseForm(contactSchema, formData)
   if (!parsed.success) return parsed.state
 
@@ -32,7 +39,10 @@ export async function createContact(_prev: ActionState, formData: FormData): Pro
       contactType: d.contactType,
       leadScore: d.leadScore,
       source: d.source,
-      assignedToUserId: orNull(d.assignedToUserId),
+      // Agents default to themselves so their own new contact doesn't
+      // vanish behind the owners-only unassigned rule; owners can
+      // deliberately leave it unassigned.
+      assignedToUserId: defaultAssignee(user, orNull(d.assignedToUserId)),
       notes: orNull(d.notes),
     })
     .returning({ id: contacts.id })
@@ -46,7 +56,9 @@ export async function updateContact(
   _prev: ActionState,
   formData: FormData
 ): Promise<ActionState> {
-  await requireUser()
+  const user = await requireUser()
+  await assertCanEditContact(user, contactId)
+
   const parsed = parseForm(contactSchema, formData)
   if (!parsed.success) return parsed.state
 
@@ -76,14 +88,18 @@ export async function updateContact(
 }
 
 export async function deleteContact(contactId: number): Promise<void> {
-  await requireUser()
+  const user = await requireUser()
+  await assertCanEditContact(user, contactId)
+
   await db.delete(contacts).where(eq(contacts.id, contactId))
   revalidatePath('/contacts')
   redirect('/contacts')
 }
 
 export async function touchLastContacted(contactId: number): Promise<void> {
-  await requireUser()
+  const user = await requireUser()
+  await assertCanEditContact(user, contactId)
+
   await db.update(contacts).set({ lastContactedAt: new Date() }).where(eq(contacts.id, contactId))
   revalidatePath(`/contacts/${contactId}`)
 }

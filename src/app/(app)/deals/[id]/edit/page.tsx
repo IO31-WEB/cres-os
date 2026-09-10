@@ -5,19 +5,22 @@ import { deals, contacts, companies, properties, users } from '@/lib/db/schema'
 import { DealForm } from '@/components/deals/deal-form'
 import { updateDeal, deleteDeal } from '@/lib/actions/deals'
 import { Button } from '@/components/ui/button'
+import { requireUser } from '@/lib/auth'
+import { canViewDeal, contactsVisibleTo, propertiesVisibleTo } from '@/lib/visibility'
 
 export default async function EditDealPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const dealId = Number(id)
   if (Number.isNaN(dealId)) notFound()
 
+  const user = await requireUser()
   const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1)
-  if (!deal) notFound()
+  if (!deal || !(await canViewDeal(user, deal))) notFound()
 
   const [allContacts, allCompanies, allProperties, allUsers] = await Promise.all([
-    db.select().from(contacts).orderBy(contacts.firstName),
+    db.select().from(contacts).where(contactsVisibleTo(user, contacts)).orderBy(contacts.firstName),
     db.select().from(companies).orderBy(companies.name),
-    db.select().from(properties).orderBy(properties.formattedAddress),
+    db.select().from(properties).where(propertiesVisibleTo(user, properties)).orderBy(properties.formattedAddress),
     db.select().from(users).orderBy(users.name),
   ])
 

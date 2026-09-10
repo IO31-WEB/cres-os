@@ -5,13 +5,19 @@ import { stagesFor, type PipelineId } from '@/lib/pipelines'
 import { DealCard } from '@/components/deals/deal-card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Handshake } from 'lucide-react'
+import { requireUser } from '@/lib/auth'
+import { dealsVisibleTo } from '@/lib/visibility'
 
 export async function PipelineBoard({ pipeline }: { pipeline: PipelineId }) {
+  const user = await requireUser()
+  const visibility = dealsVisibleTo(user)
+  const baseCondition = and(eq(deals.pipeline, pipeline), eq(deals.status, 'open'))
+
   const rows = await db
     .select({ deal: deals, contactFirstName: contacts.firstName, contactLastName: contacts.lastName })
     .from(deals)
     .leftJoin(contacts, eq(deals.contactId, contacts.id))
-    .where(and(eq(deals.pipeline, pipeline), eq(deals.status, 'open')))
+    .where(visibility ? and(baseCondition, visibility) : baseCondition)
 
   if (rows.length === 0) {
     return (

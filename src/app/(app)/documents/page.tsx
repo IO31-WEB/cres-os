@@ -10,6 +10,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { DOCUMENT_TYPE_LABELS } from '@/lib/validations/document'
 import type { DOCUMENT_TYPES } from '@/lib/validations/document'
 import { setDocumentStatus, deleteDocument } from '@/lib/actions/documents'
+import { requireUser } from '@/lib/auth'
+import { documentsVisibleTo } from '@/lib/visibility'
 
 const NEXT_STATUS: Record<string, 'sent' | 'viewed' | 'signed' | null> = {
   draft: 'sent',
@@ -20,10 +22,14 @@ const NEXT_STATUS: Record<string, 'sent' | 'viewed' | 'signed' | null> = {
 }
 
 export default async function DocumentsPage() {
+  const user = await requireUser()
+  const visibility = documentsVisibleTo(user)
+
   const rows = await db
     .select({ document: documents, dealName: deals.name })
     .from(documents)
     .leftJoin(deals, eq(documents.dealId, deals.id))
+    .where(visibility)
     .orderBy(desc(documents.createdAt))
 
   return (

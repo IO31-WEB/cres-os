@@ -8,9 +8,13 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Badge } from '@/components/ui/badge'
 import { PROPERTY_TYPE_LABELS, LISTING_STATUS_LABELS } from '@/lib/validations/property'
 import type { PROPERTY_TYPES, LISTING_STATUSES } from '@/lib/validations/property'
+import { requireUser } from '@/lib/auth'
+import { propertiesVisibleTo } from '@/lib/visibility'
 
 export default async function PropertiesPage() {
-  const rows = await db.select().from(properties).orderBy(desc(properties.updatedAt))
+  const user = await requireUser()
+  const visibility = propertiesVisibleTo(user, properties)
+  const rows = await db.select().from(properties).where(visibility).orderBy(desc(properties.updatedAt))
 
   return (
     <div>
