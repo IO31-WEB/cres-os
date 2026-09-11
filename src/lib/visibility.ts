@@ -26,7 +26,7 @@ import type { User, Contact, Property, Company, Deal, Commission, Document, Scor
  * Every list query, detail page, edit page, and server action for
  * contacts, companies, properties, deals, documents, commissions, and
  * scorecards must go through one of these — never trust a client-supplied
- * id without running it through the matching canView*/*VisibleTo check
+ * id without running it through the matching canView...VisibleTo check
  * first (that's the IDOR prevention).
  */
 
