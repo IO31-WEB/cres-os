@@ -1,8 +1,9 @@
-import { and, eq, or, isNull, lt, lte, gte, ne, sql } from 'drizzle-orm'
+import { and, eq, or, isNull, lt, lte, ne } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { users, contacts, deals, documents, commissions } from '@/lib/db/schema'
+import { users, contacts, deals, documents, commissions, dealCollaborators } from '@/lib/db/schema'
 import { dailyPriorities } from '@/lib/db/schema'
 import { draftReengagement } from '@/lib/ai/reengagement-drafts'
+import type { Deal } from '@/lib/db/schema'
 
 const COLD_AFTER_DAYS = 7
 const HOT_STALE_DAYS = 2
@@ -56,10 +57,26 @@ export async function generateDailyPriorities(): Promise<number> {
 
   // Assigned-or-unassigned-to-owner helper: an item assigned to a specific
   // user shows for that user; an unassigned item shows for every owner, so
-  // nothing falls through the cracks before someone claims it.
+  // nothing falls through the cracks before someone claims it. Used for
+  // contacts, which have no collaborator concept.
   function audienceFor(assignedToUserId: string | null): string[] {
     if (assignedToUserId) return [assignedToUserId]
     return owners.map((o) => o.id)
+  }
+
+  // Deals additionally share visibility with their helping agents, so a
+  // deal's priority cards (going cold, its NDA, its commission) reach
+  // whoever was added as a collaborator too — not just the primary agent.
+  const allCollaborators = await db.select().from(dealCollaborators)
+  const collaboratorsByDeal = new Map<number, string[]>()
+  for (const row of allCollaborators) {
+    collaboratorsByDeal.set(row.dealId, [...(collaboratorsByDeal.get(row.dealId) ?? []), row.userId])
+  }
+
+  function audienceForDeal(deal: Pick<Deal, 'id' | 'assignedToUserId'>): string[] {
+    const base = audienceFor(deal.assignedToUserId)
+    const helpers = collaboratorsByDeal.get(deal.id) ?? []
+    return [...new Set([...base, ...helpers])]
   }
 
   // 1. Hot opportunities — hot leads gone quiet for a couple of days
@@ -114,7 +131,7 @@ export async function generateDailyPriorities(): Promise<number> {
   for (const deal of openDeals) {
     const daysCold = Math.floor((Date.now() - new Date(deal.lastActivityAt).getTime()) / 86_400_000)
     const draftMessage = await draftReengagement(deal).catch(() => undefined)
-    for (const userId of audienceFor(deal.assignedToUserId)) {
+    for (const userId of audienceForDeal(deal)) {
       drafts.push({
         forUserId: userId,
         category: 'deal_going_cold',
@@ -137,9 +154,10 @@ export async function generateDailyPriorities(): Promise<number> {
       )
     )
   for (const doc of staleDocs) {
-    const deal = doc.dealId ? await db.select().from(deals).where(eq(deals.id, doc.dealId)).limit(1) : []
-    const assignedTo = deal[0]?.assignedToUserId ?? null
-    for (const userId of audienceFor(assignedTo)) {
+    const dealRows = doc.dealId ? await db.select().from(deals).where(eq(deals.id, doc.dealId)).limit(1) : []
+    const deal = dealRows[0]
+    const audience = deal ? audienceForDeal(deal) : audienceFor(null)
+    for (const userId of audience) {
       drafts.push({
         forUserId: userId,
         category: 'nda_outstanding',
@@ -162,7 +180,8 @@ export async function generateDailyPriorities(): Promise<number> {
     )
   for (const commission of dueCommissions) {
     const [deal] = await db.select().from(deals).where(eq(deals.id, commission.dealId)).limit(1)
-    for (const userId of audienceFor(deal?.assignedToUserId ?? null)) {
+    const audience = deal ? audienceForDeal(deal) : audienceFor(null)
+    for (const userId of audience) {
       drafts.push({
         forUserId: userId,
         category: 'commission_due',
