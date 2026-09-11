@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { and, eq, gte } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { scorecardAnalyses, properties } from '@/lib/db/schema'
+import { scorecardAnalyses, properties, deals } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
+import { canViewProperty, canViewDeal } from '@/lib/visibility'
+import { checkAndIncrementDailyLimit } from '@/lib/rate-limit'
 import { geocodeAddress } from '@/lib/data-sources/geocode'
 import { getTractDemographics } from '@/lib/data-sources/census'
 import { getNearbyRetailers } from '@/lib/data-sources/places'
@@ -64,9 +67,15 @@ export async function POST(req: NextRequest) {
   }
 
   if (parsed.propertyId) {
-    const [property] = await db.select({ id: properties.id }).from(properties).where(eq(properties.id, parsed.propertyId)).limit(1)
-    if (!property) {
-      return NextResponse.json({ error: 'That property no longer exists.' }, { status: 404 })
+    const [property] = await db.select().from(properties).where(eq(properties.id, parsed.propertyId)).limit(1)
+    if (!property || !canViewProperty(user, property)) {
+      return NextResponse.json({ error: 'That property was not found.' }, { status: 404 })
+    }
+  }
+  if (parsed.dealId) {
+    const [deal] = await db.select().from(deals).where(eq(deals.id, parsed.dealId)).limit(1)
+    if (!deal || !(await canViewDeal(user, deal))) {
+      return NextResponse.json({ error: 'That deal was not found.' }, { status: 404 })
     }
   }
 
@@ -106,7 +115,23 @@ export async function POST(req: NextRequest) {
         })
         .where(eq(scorecardAnalyses.id, cached.id))
     }
+    // The property page is a separate route from this one and Next.js
+    // caches visited routes client-side, so without this, navigating back
+    // to the property after running a scorecard can show a stale "no
+    // analyses yet" version until something else invalidates it.
+    if (parsed.propertyId) revalidatePath(`/properties/${parsed.propertyId}`)
     return NextResponse.json({ reportId: cached.id, cached: true, ...serialize(cached) })
+  }
+
+  // Only fresh analyses hit this cap — repeat/cached lookups above are
+  // free. Backstop against a runaway loop racking up API costs, not a
+  // precise per-agent quota.
+  const limit = await checkAndIncrementDailyLimit(`scorecard:${user.id}`, 100)
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { error: "You've hit today's scorecard limit. Try again tomorrow, or ask an owner to help." },
+      { status: 429 }
+    )
   }
 
   // Fan out to every free data source in parallel. Each is wrapped so one
@@ -208,6 +233,7 @@ export async function POST(req: NextRequest) {
     })
     .returning()
 
+  if (parsed.propertyId) revalidatePath(`/properties/${parsed.propertyId}`)
   return NextResponse.json({ reportId: inserted.id, cached: false, ...serialize(inserted) })
 }
 

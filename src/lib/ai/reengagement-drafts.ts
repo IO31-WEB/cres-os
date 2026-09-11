@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { contacts } from '@/lib/db/schema'
 import { PIPELINES, type PipelineId } from '@/lib/pipelines'
+import { checkAndIncrementDailyLimit } from '@/lib/rate-limit'
 import type { Deal } from '@/lib/db/schema'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
@@ -13,6 +14,13 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
  * sending — never sent automatically.
  */
 export async function draftReengagement(deal: Deal): Promise<string> {
+  // Cron-triggered, not user-triggered — a backstop cap in case the cold-
+  // deal count ever balloons unexpectedly, not a normal-usage limit.
+  const limit = await checkAndIncrementDailyLimit('reengagement:daily', 200)
+  if (!limit.allowed) {
+    throw new Error('Daily re-engagement draft limit reached.')
+  }
+
   const contact = deal.contactId
     ? (await db.select().from(contacts).where(eq(contacts.id, deal.contactId)).limit(1))[0]
     : undefined

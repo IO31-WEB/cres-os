@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { FileText, Plus } from 'lucide-react'
+import { FileText, Plus, Download } from 'lucide-react'
 import { desc } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { documents, deals } from '@/lib/db/schema'
@@ -74,6 +74,11 @@ export default async function DocumentsPage() {
                   <Badge variant={document.status === 'signed' ? 'green' : document.status === 'expired' ? 'red' : 'neutral'}>
                     {document.status}
                   </Badge>
+                  <Button asChild size="sm" variant="outline">
+                    <a href={`/api/documents/${document.id}/download`}>
+                      <Download className="h-3.5 w-3.5" /> Download
+                    </a>
+                  </Button>
                   {boundAdvance && (
                     <form action={boundAdvance}>
                       <Button type="submit" size="sm" variant="outline">

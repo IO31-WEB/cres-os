@@ -5,9 +5,13 @@ import { db } from '@/lib/db'
 import { companies } from '@/lib/db/schema'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import { requireUser } from '@/lib/auth'
+import { companiesVisibleTo } from '@/lib/visibility'
 
 export default async function CompaniesPage() {
-  const rows = await db.select().from(companies).orderBy(desc(companies.updatedAt))
+  const user = await requireUser()
+  const visibility = companiesVisibleTo(user, companies)
+  const rows = await db.select().from(companies).where(visibility).orderBy(desc(companies.updatedAt))
 
   return (
     <div>

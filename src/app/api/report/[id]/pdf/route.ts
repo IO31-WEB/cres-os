@@ -5,6 +5,7 @@ import puppeteer from 'puppeteer-core'
 import { db } from '@/lib/db'
 import { scorecardAnalyses } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
+import { canViewScorecard } from '@/lib/visibility'
 import { renderReportHtml } from '@/lib/pdf-template'
 import type { GradeWeights } from '@/lib/grader'
 import { getBusinessProfile } from '@/lib/business-profiles'
@@ -46,6 +47,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const report = await db.query.scorecardAnalyses.findFirst({ where: eq(scorecardAnalyses.id, reportId) })
   if (!report) {
+    return NextResponse.json({ error: 'Report not found' }, { status: 404 })
+  }
+  if (!(await canViewScorecard(user, report))) {
+    // Same response as "not found" — don't reveal that a report with this
+    // id exists but belongs to someone else.
     return NextResponse.json({ error: 'Report not found' }, { status: 404 })
   }
 

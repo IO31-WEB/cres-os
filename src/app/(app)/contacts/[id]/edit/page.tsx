@@ -6,7 +6,7 @@ import { ContactForm } from '@/components/contacts/contact-form'
 import { updateContact, deleteContact } from '@/lib/actions/contacts'
 import { Button } from '@/components/ui/button'
 import { requireUser } from '@/lib/auth'
-import { canViewContact } from '@/lib/visibility'
+import { canViewContact, companiesVisibleTo } from '@/lib/visibility'
 
 export default async function EditContactPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -18,7 +18,7 @@ export default async function EditContactPage({ params }: { params: Promise<{ id
   if (!contact || !canViewContact(user, contact)) notFound()
 
   const [allCompanies, allUsers] = await Promise.all([
-    db.select().from(companies).orderBy(companies.name),
+    db.select().from(companies).where(companiesVisibleTo(user, companies)).orderBy(companies.name),
     db.select().from(users).orderBy(users.name),
   ])
 

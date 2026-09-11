@@ -1,21 +1,28 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { eq } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { Pencil, Globe, Phone } from 'lucide-react'
 import { db } from '@/lib/db'
 import { companies, contacts } from '@/lib/db/schema'
 import { Button } from '@/components/ui/button'
 import { LeadScoreBadge } from '@/components/contacts/lead-score-badge'
+import { requireUser } from '@/lib/auth'
+import { canViewCompany, contactsVisibleTo } from '@/lib/visibility'
 
 export default async function CompanyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const companyId = Number(id)
   if (Number.isNaN(companyId)) notFound()
 
+  const user = await requireUser()
   const [company] = await db.select().from(companies).where(eq(companies.id, companyId)).limit(1)
-  if (!company) notFound()
+  if (!company || !canViewCompany(user, company)) notFound()
 
-  const relatedContacts = await db.select().from(contacts).where(eq(contacts.companyId, companyId))
+  const contactVisibility = contactsVisibleTo(user, contacts)
+  const relatedContacts = await db
+    .select()
+    .from(contacts)
+    .where(contactVisibility ? and(eq(contacts.companyId, companyId), contactVisibility) : eq(contacts.companyId, companyId))
 
   return (
     <div className="max-w-3xl">

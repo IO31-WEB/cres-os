@@ -37,6 +37,9 @@ export const companies = pgTable('companies', {
   phone: text('phone'),
   address: text('address'),
   notes: text('notes'),
+  // Drives per-agent visibility, same rule as contacts/properties/deals:
+  // null = owners-only until assigned.
+  assignedToUserId: text('assigned_to_user_id').references(() => users.id),
   createdByUserId: text('created_by_user_id').references(() => users.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -242,7 +245,9 @@ export const documents = pgTable('documents', {
   type: text('type').notNull(),
 
   fileName: text('file_name').notNull(),
-  fileUrl: text('file_url').notNull(), // Cloudflare R2 object URL
+  objectKey: text('object_key').notNull(), // R2 object key — private bucket, never a public URL
+  fileSizeBytes: integer('file_size_bytes'),
+  contentType: text('content_type'),
 
   // 'draft' | 'sent' | 'viewed' | 'signed' | 'expired'
   status: text('status').notNull().default('draft'),

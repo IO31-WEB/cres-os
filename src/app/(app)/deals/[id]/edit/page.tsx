@@ -6,7 +6,7 @@ import { DealForm } from '@/components/deals/deal-form'
 import { updateDeal, deleteDeal } from '@/lib/actions/deals'
 import { Button } from '@/components/ui/button'
 import { requireUser } from '@/lib/auth'
-import { canViewDeal, contactsVisibleTo, propertiesVisibleTo } from '@/lib/visibility'
+import { canViewDeal, contactsVisibleTo, propertiesVisibleTo, companiesVisibleTo } from '@/lib/visibility'
 
 export default async function EditDealPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -19,7 +19,7 @@ export default async function EditDealPage({ params }: { params: Promise<{ id: s
 
   const [allContacts, allCompanies, allProperties, allUsers] = await Promise.all([
     db.select().from(contacts).where(contactsVisibleTo(user, contacts)).orderBy(contacts.firstName),
-    db.select().from(companies).orderBy(companies.name),
+    db.select().from(companies).where(companiesVisibleTo(user, companies)).orderBy(companies.name),
     db.select().from(properties).where(propertiesVisibleTo(user, properties)).orderBy(properties.formattedAddress),
     db.select().from(users).orderBy(users.name),
   ])

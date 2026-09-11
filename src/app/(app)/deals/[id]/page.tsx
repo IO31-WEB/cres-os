@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { eq } from 'drizzle-orm'
-import { Pencil, CheckCircle2, XCircle, ShieldCheck, Plus } from 'lucide-react'
+import { Pencil, CheckCircle2, XCircle, ShieldCheck, Plus, Download } from 'lucide-react'
 import { db } from '@/lib/db'
 import { deals, contacts, companies, properties, documents, commissions, dealCollaborators, users } from '@/lib/db/schema'
 import { Button } from '@/components/ui/button'
@@ -170,6 +170,12 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
               <li key={doc.id} className="flex items-center gap-2 text-sm">
                 <span className="text-ink">{doc.fileName}</span>
                 <Badge variant={doc.status === 'signed' ? 'green' : 'neutral'}>{doc.status}</Badge>
+                <a
+                  href={`/api/documents/${doc.id}/download`}
+                  className="inline-flex items-center gap-1 text-xs text-navy hover:underline dark:text-white"
+                >
+                  <Download className="h-3 w-3" /> Download
+                </a>
               </li>
             ))}
           </ul>

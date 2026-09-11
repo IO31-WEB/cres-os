@@ -46,18 +46,20 @@ NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/dashboard
 Use a **separate Clerk application** from ListOps/Blancs — this product has
 its own user list (just Mari + her agents).
 
-### Cloudflare R2 (document storage)
+### Cloudflare R2 (document storage — private bucket)
 ```
 R2_ACCOUNT_ID=...
 R2_ACCESS_KEY_ID=...
 R2_SECRET_ACCESS_KEY=...
 R2_DOCUMENTS_BUCKET=cres-documents
-R2_DOCUMENTS_PUBLIC_URL=https://documents.cressolutions.com   # or your r2.dev URL
 ```
 Create a **new bucket** for this (`cres-documents`) rather than reusing a
 ListOps bucket — NDAs, LOIs, and financials are sensitive and should sit in
-their own bucket with their own access scope. Same R2 account is fine, new
-bucket + new API token scoped to just that bucket.
+their own bucket with their own access scope. **Keep public access OFF and
+do not enable the bucket's r2.dev URL** — documents are only ever served
+through a permission-checked, short-lived signed URL
+(`/api/documents/[id]/download`), never a direct link. See
+`docs/MODULE_SECURITY_SETUP.md` for the full rationale and R2 CORS policy.
 
 ### Lead intake (inbound webhook shared secret)
 ```

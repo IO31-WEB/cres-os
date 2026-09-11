@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { contacts, leadIntakes } from '@/lib/db/schema'
 import { classifyLead } from '@/lib/ai/lead-classifier'
 import { findExistingContact } from '@/lib/ai/dedupe'
+import { checkAndIncrementDailyLimit } from '@/lib/rate-limit'
 import type { LeadIntakePayload } from '@/lib/validations/lead-intake'
 
 /**
@@ -12,6 +13,18 @@ import type { LeadIntakePayload } from '@/lib/validations/lead-intake'
  * qualify endpoint (re-run, e.g. after the AI call failed the first time).
  */
 export async function processLeadIntake(leadIntakeId: number, payload: LeadIntakePayload): Promise<number> {
+  // Backstop against a misfiring webhook integration looping and burning
+  // through the Anthropic budget — not a normal-usage limit, this is far
+  // above realistic daily lead volume for one firm.
+  const limit = await checkAndIncrementDailyLimit('leadclassify:daily', 300)
+  if (!limit.allowed) {
+    await db
+      .update(leadIntakes)
+      .set({ status: 'new', aiClassification: { error: 'Daily classification limit reached — retry later.' } })
+      .where(eq(leadIntakes.id, leadIntakeId))
+    throw new Error('Daily lead classification limit reached.')
+  }
+
   await db.update(leadIntakes).set({ status: 'processing' }).where(eq(leadIntakes.id, leadIntakeId))
 
   let classification

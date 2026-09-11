@@ -9,6 +9,7 @@ import { requireUser } from '@/lib/auth'
 import { documentRecordSchema, type DOCUMENT_STATUSES } from '@/lib/validations/document'
 import { parseForm, type ActionState } from '@/lib/actions/form-state'
 import { canViewDeal, canViewContact, canViewProperty, canViewDocument } from '@/lib/visibility'
+import { verifyUploadedObject, sanitizeFileName, deleteObject } from '@/lib/r2'
 
 export async function createDocumentRecord(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireUser()
@@ -18,7 +19,7 @@ export async function createDocumentRecord(_prev: ActionState, formData: FormDat
   const d = parsed.data
 
   // Verify access to whichever parent record this document is being
-  // attached to, so an agent can't upload a document onto a deal/contact/
+  // attached to, so an agent can't attach a document to a deal/contact/
   // property they can't otherwise see.
   if (d.dealId) {
     const [deal] = await db.select().from(deals).where(eq(deals.id, Number(d.dealId))).limit(1)
@@ -33,10 +34,20 @@ export async function createDocumentRecord(_prev: ActionState, formData: FormDat
     if (!property || !canViewProperty(user, property)) notFound()
   }
 
+  // The presigned PUT can't itself enforce a hard size/type cap, so verify
+  // what actually landed in R2 before trusting it — reject and delete the
+  // object if it doesn't match what was declared at presign time.
+  const verification = await verifyUploadedObject(d.objectKey, d.contentType)
+  if (!verification.ok) {
+    return { errors: {}, message: verification.error }
+  }
+
   await db.insert(documents).values({
     type: d.type,
-    fileName: d.fileName,
-    fileUrl: d.fileUrl,
+    fileName: sanitizeFileName(d.fileName),
+    objectKey: d.objectKey,
+    fileSizeBytes: verification.sizeBytes,
+    contentType: d.contentType,
     dealId: d.dealId ? Number(d.dealId) : null,
     contactId: d.contactId ? Number(d.contactId) : null,
     propertyId: d.propertyId ? Number(d.propertyId) : null,
@@ -81,6 +92,11 @@ export async function deleteDocument(documentId: number): Promise<void> {
   if (!doc || !(await canViewDocument(user, doc))) notFound()
 
   await db.delete(documents).where(eq(documents.id, documentId))
+  await deleteObject(doc.objectKey).catch(() => {
+    // Best-effort — an orphaned R2 object with an unpredictable key and no
+    // DB row pointing at it is inert; not worth failing the delete over.
+  })
+
   revalidatePath('/documents')
   if (doc.dealId) revalidatePath(`/deals/${doc.dealId}`)
 }

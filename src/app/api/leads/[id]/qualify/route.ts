@@ -2,12 +2,18 @@ import { NextResponse } from 'next/server'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { leadIntakes } from '@/lib/db/schema'
-import { requireUser } from '@/lib/auth'
+import { requireUser, isOwner } from '@/lib/auth'
 import { leadIntakeSchema } from '@/lib/validations/lead-intake'
 import { processLeadIntake } from '@/lib/ai/process-lead'
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  await requireUser()
+  const user = await requireUser()
+  // Unconverted lead intakes are unassigned by definition (same rule as
+  // any other unassigned record) — only owners can see or retry them, so
+  // the API enforces that too rather than relying on the UI hiding it.
+  if (!isOwner(user)) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
 
   const { id } = await params
   const leadIntakeId = Number(id)
