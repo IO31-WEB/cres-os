@@ -7,8 +7,10 @@ import { db } from '@/lib/db'
 import { companies } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
 import { companySchema } from '@/lib/validations/company'
-import { parseForm, type ActionState } from '@/lib/actions/form-state'
-import { canViewCompany, defaultAssignee } from '@/lib/visibility'
+import { parseForm, fieldError, type ActionState } from '@/lib/actions/form-state'
+import { canViewCompany, resolveAssignment } from '@/lib/visibility'
+import { assertUserExists } from '@/lib/actions/link-guard'
+import { logAuditBestEffort } from '@/lib/audit'
 
 function orNull(value: string | undefined): string | null {
   return value && value.length > 0 ? value : null
@@ -26,6 +28,11 @@ export async function createCompany(_prev: ActionState, formData: FormData): Pro
   if (!parsed.success) return parsed.state
 
   const d = parsed.data
+  const assignment = resolveAssignment(user, orNull(d.assignedToUserId))
+  if (!assignment.ok) return fieldError('assignedToUserId', assignment.error)
+  const userError = await assertUserExists(assignment.value)
+  if (userError) return fieldError('assignedToUserId', userError)
+
   const [created] = await db
     .insert(companies)
     .values({
@@ -35,12 +42,12 @@ export async function createCompany(_prev: ActionState, formData: FormData): Pro
       phone: orNull(d.phone),
       address: orNull(d.address),
       notes: orNull(d.notes),
-      // Agents default to themselves so their own new company doesn't
-      // vanish behind the owners-only unassigned rule.
-      assignedToUserId: defaultAssignee(user, orNull(d.assignedToUserId)),
+      assignedToUserId: assignment.value,
       createdByUserId: user.id,
     })
     .returning({ id: companies.id })
+
+  await logAuditBestEffort({ user, action: 'company.create', entityType: 'company', entityId: created.id })
 
   revalidatePath('/companies')
   redirect(`/companies/${created.id}`)
@@ -52,12 +59,17 @@ export async function updateCompany(
   formData: FormData
 ): Promise<ActionState> {
   const user = await requireUser()
-  await assertCanEditCompany(user, companyId)
+  const existing = await assertCanEditCompany(user, companyId)
 
   const parsed = parseForm(companySchema, formData)
   if (!parsed.success) return parsed.state
 
   const d = parsed.data
+  const assignment = resolveAssignment(user, orNull(d.assignedToUserId), existing.assignedToUserId)
+  if (!assignment.ok) return fieldError('assignedToUserId', assignment.error)
+  const userError = await assertUserExists(assignment.value)
+  if (userError) return fieldError('assignedToUserId', userError)
+
   await db
     .update(companies)
     .set({
@@ -67,7 +79,7 @@ export async function updateCompany(
       phone: orNull(d.phone),
       address: orNull(d.address),
       notes: orNull(d.notes),
-      assignedToUserId: orNull(d.assignedToUserId),
+      assignedToUserId: assignment.value,
       updatedAt: new Date(),
     })
     .where(eq(companies.id, companyId))
@@ -82,6 +94,7 @@ export async function deleteCompany(companyId: number): Promise<void> {
   await assertCanEditCompany(user, companyId)
 
   await db.delete(companies).where(eq(companies.id, companyId))
+  await logAuditBestEffort({ user, action: 'company.delete', entityType: 'company', entityId: companyId })
   revalidatePath('/companies')
   redirect('/companies')
 }

@@ -6,7 +6,7 @@ import { db } from '@/lib/db'
 import { scorecardAnalyses } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
 import { canViewScorecard } from '@/lib/visibility'
-import { renderReportHtml } from '@/lib/pdf-template'
+import { renderReportHtml, type TemplateData } from '@/lib/pdf-template'
 import type { GradeWeights } from '@/lib/grader'
 import { getBusinessProfile } from '@/lib/business-profiles'
 
@@ -55,7 +55,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'Report not found' }, { status: 404 })
   }
 
-  const rawData = report.rawData as any
+  // rawData is stored as jsonb; older report rows may have a legacy
+  // `anchors` field where newer ones use `synergyAnchors` — keep both
+  // read paths working rather than dropping backward compatibility.
+  const rawData = report.rawData as TemplateData['rawData'] & { anchors?: TemplateData['rawData']['synergyAnchors'] }
   const mapAnchors = [
     ...(rawData?.synergyAnchors ?? rawData?.anchors ?? []),
     ...(rawData?.saturationAnchors ?? []),
@@ -63,7 +66,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const mapImageDataUri = await fetchStaticMapDataUri(
     report.lat,
     report.lng,
-    mapAnchors.filter((a: any) => a.lat != null && a.lng != null).slice(0, 8)
+    mapAnchors.filter((a): a is (typeof mapAnchors)[number] & { lat: number; lng: number } => a.lat != null && a.lng != null).slice(0, 8)
   )
 
   const html = renderReportHtml({
@@ -76,7 +79,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       year: 'numeric', month: 'long', day: 'numeric',
     }),
     rawData,
-    narrative: report.narrative as any,
+    narrative: report.narrative as TemplateData['narrative'],
     mapImageDataUri,
   })
 

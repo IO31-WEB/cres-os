@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { desc, eq, and } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { FileBarChart } from 'lucide-react'
 import { db } from '@/lib/db'
 import { properties, scorecardAnalyses } from '@/lib/db/schema'

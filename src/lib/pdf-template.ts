@@ -11,7 +11,7 @@ import type { GradeWeights } from './grader'
 import { CATEGORY_LABELS, scoreToGrade } from './grader'
 import { LOGO_DATA_URI } from './logo'
 
-interface TemplateData {
+export interface TemplateData {
   formattedAddress: string
   businessProfileLabel: string
   overallGrade: string

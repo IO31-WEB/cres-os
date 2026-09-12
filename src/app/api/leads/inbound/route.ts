@@ -3,6 +3,15 @@ import { db } from '@/lib/db'
 import { leadIntakes } from '@/lib/db/schema'
 import { leadIntakeSchema } from '@/lib/validations/lead-intake'
 import { processLeadIntake } from '@/lib/ai/process-lead'
+import { checkAndIncrementDailyLimit } from '@/lib/rate-limit'
+import { secretsMatch } from '@/lib/secrets'
+
+function clientIp(req: NextRequest): string {
+  // Vercel sets x-forwarded-for; fall back to a constant bucket if it's
+  // ever missing so the rate limiter still has a key to work with rather
+  // than throwing.
+  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+}
 
 /**
  * Single entry point for every inbound channel (website form, email
@@ -12,13 +21,31 @@ import { processLeadIntake } from '@/lib/ai/process-lead'
  * setup notes.
  *
  * Auth is a shared secret rather than Clerk, since these are server-to-
- * server calls with no user session.
+ * server calls with no user session. Two rate limits apply on top of that:
+ * a per-IP cap on *failed* auth attempts (slows down brute-forcing the
+ * secret) and a global daily cap on accepted intake volume (backstop
+ * against a misbehaving/compromised integration flooding the pipeline —
+ * each accepted lead triggers an AI classification call downstream).
  */
 export async function POST(req: NextRequest) {
   const secret = process.env.LEAD_INTAKE_SECRET
   const provided = req.headers.get('x-lead-intake-secret')
-  if (!secret || provided !== secret) {
+
+  if (!secret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  if (!secretsMatch(provided, secret)) {
+    const authLimit = await checkAndIncrementDailyLimit(`lead-intake-auth-fail:${clientIp(req)}`, 20)
+    if (!authLimit.allowed) {
+      return NextResponse.json({ error: 'Too many attempts.' }, { status: 429 })
+    }
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const volumeLimit = await checkAndIncrementDailyLimit('lead-intake:daily', 500)
+  if (!volumeLimit.allowed) {
+    return NextResponse.json({ error: 'Daily lead intake limit reached. Contact support if this is expected.' }, { status: 429 })
   }
 
   let payload

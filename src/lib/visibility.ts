@@ -1,6 +1,7 @@
 import { sql, eq, or, and, type SQL } from 'drizzle-orm'
+import type { PgColumn } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
-import { deals, dealCollaborators, commissions, documents, contacts, properties, companies, scorecardAnalyses } from '@/lib/db/schema'
+import { deals, dealCollaborators, commissions, documents, contacts, properties, scorecardAnalyses } from '@/lib/db/schema'
 import { isOwner } from '@/lib/auth'
 import type { User, Contact, Property, Company, Deal, Commission, Document, ScorecardAnalysis } from '@/lib/db/schema'
 
@@ -30,17 +31,17 @@ import type { User, Contact, Property, Company, Deal, Commission, Document, Scor
  * first (that's the IDOR prevention).
  */
 
-export function contactsVisibleTo(user: User, contactsTable: { assignedToUserId: any }): SQL | undefined {
+export function contactsVisibleTo(user: User, contactsTable: { assignedToUserId: PgColumn }): SQL | undefined {
   if (isOwner(user)) return undefined
   return eq(contactsTable.assignedToUserId, user.id)
 }
 
-export function companiesVisibleTo(user: User, companiesTable: { assignedToUserId: any }): SQL | undefined {
+export function companiesVisibleTo(user: User, companiesTable: { assignedToUserId: PgColumn }): SQL | undefined {
   if (isOwner(user)) return undefined
   return eq(companiesTable.assignedToUserId, user.id)
 }
 
-export function propertiesVisibleTo(user: User, propertiesTable: { assignedToUserId: any }): SQL | undefined {
+export function propertiesVisibleTo(user: User, propertiesTable: { assignedToUserId: PgColumn }): SQL | undefined {
   if (isOwner(user)) return undefined
   return eq(propertiesTable.assignedToUserId, user.id)
 }
@@ -163,12 +164,48 @@ export async function canViewScorecard(user: User, analysis: ScorecardAnalysis):
 }
 
 /**
- * On create, an agent's own new record defaults to assigned-to-themselves
- * if they didn't pick someone else — otherwise it would be immediately
- * invisible to them (unassigned = owners-only). Owners can leave things
- * unassigned on purpose, so this only applies to agents.
+ * Authorizes a client-submitted assignedToUserId before it's written —
+ * this is the fix for "agents can assign records to arbitrary users" and
+ * "users can impersonate another user via a submitted id". Never write
+ * assignedToUserId (or similarly-named fields anywhere else in the app)
+ * straight from request input; always route it through this first.
+ *
+ * - Owners can assign any record to anyone, or leave it unassigned.
+ * - Agents can only ever leave a record assigned to themselves: claiming
+ *   it (assigning to self) and no-op edits (resubmitting whatever it's
+ *   already set to) are both fine. Reassigning to a *different* user, or
+ *   unassigning a record someone else owns, is not — regardless of what
+ *   the request body contains.
+ *
+ * `currentAssigneeId` is the value already persisted on the record being
+ * edited; omit it (or pass `undefined`) for a brand-new record.
  */
-export function defaultAssignee(user: User, submittedAssigneeId: string | null): string | null {
-  if (submittedAssigneeId) return submittedAssigneeId
-  return isOwner(user) ? null : user.id
+export type AssignmentResult = { ok: true; value: string | null } | { ok: false; error: string }
+
+export function resolveAssignment(
+  user: User,
+  submittedAssigneeId: string | null,
+  currentAssigneeId?: string | null
+): AssignmentResult {
+  if (isOwner(user)) {
+    return { ok: true, value: submittedAssigneeId }
+  }
+
+  // Agent's own new record defaults to themselves if unspecified —
+  // otherwise it would be immediately invisible to them (unassigned =
+  // owners-only). Explicitly submitting their own id is equally fine.
+  if (submittedAssigneeId === null || submittedAssigneeId === user.id) {
+    return { ok: true, value: submittedAssigneeId ?? user.id }
+  }
+
+  // No-op resubmission of whatever the record already has — lets an
+  // agent edit unrelated fields on a record without this check tripping,
+  // even if that record happens to be a deal they only have collaborator
+  // (not primary-assignee) access to.
+  if (currentAssigneeId !== undefined && submittedAssigneeId === currentAssigneeId) {
+    return { ok: true, value: submittedAssigneeId }
+  }
+
+  return { ok: false, error: "You don't have permission to assign records to other users." }
 }
+

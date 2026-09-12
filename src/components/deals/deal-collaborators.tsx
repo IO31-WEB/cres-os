@@ -4,7 +4,6 @@ import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { X, UserPlus } from 'lucide-react'
 import { Select } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
 import { addDealCollaborator, removeDealCollaborator } from '@/lib/actions/deal-collaborators'
 import type { User } from '@/lib/db/schema'
 

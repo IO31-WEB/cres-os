@@ -4,13 +4,17 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { users } from '@/lib/db/schema'
 import { eq } from 'drizzle-orm'
+import { provisionUser } from '@/lib/user-provisioning'
+import { logAudit } from '@/lib/audit'
 import type { WebhookEvent } from '@clerk/nextjs/server'
 
 /**
  * Keeps `users` in sync with Clerk so the rest of the schema can hold plain
  * FKs to a local id instead of hitting Clerk's API on every join. The first
- * user ever created is made 'owner' (Mari); everyone after defaults to
- * 'agent' and can be promoted from Settings later.
+ * user ever created is made 'owner'; everyone after defaults to 'agent' and
+ * can be promoted from Settings later. Owner assignment goes through
+ * lib/user-provisioning.ts, which is race-safe across concurrent signups
+ * and multiple serverless instances (see that file for why).
  */
 export async function POST(request: Request) {
   const webhookSecret = process.env.CLERK_WEBHOOK_SECRET
@@ -46,9 +50,6 @@ export async function POST(request: Request) {
     const primaryEmail = email_addresses.find((e) => e.id === event.data.primary_email_address_id)
     const name = [first_name, last_name].filter(Boolean).join(' ') || primaryEmail?.email_address || 'Unnamed'
 
-    const [existingCount] = await db.select({ id: users.id }).from(users).limit(1)
-    const role = event.type === 'user.created' && !existingCount ? 'owner' : undefined
-
     const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1)
 
     if (existing) {
@@ -62,18 +63,27 @@ export async function POST(request: Request) {
         })
         .where(eq(users.id, id))
     } else {
-      await db.insert(users).values({
+      await provisionUser({
         id,
         email: primaryEmail?.email_address ?? '',
         name,
         imageUrl: image_url ?? null,
-        role: role ?? 'agent',
       })
     }
   }
 
   if (event.type === 'user.deleted' && event.data.id) {
+    // FKs from every other table onto users.id are ON DELETE SET NULL (or
+    // CASCADE for pure membership rows like deal_collaborators) — see
+    // drizzle/0005_security_hardening_v2.sql — so this can't fail with an
+    // FK-violation the way it could before that migration.
     await db.delete(users).where(eq(users.id, event.data.id))
+    await logAudit({
+      action: 'user.deleted',
+      entityType: 'user',
+      entityId: event.data.id,
+      actorLabel: 'clerk-webhook',
+    })
   }
 
   return NextResponse.json({ received: true })

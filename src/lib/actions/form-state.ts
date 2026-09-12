@@ -12,6 +12,16 @@ export interface ActionState {
 export const EMPTY_STATE: ActionState = { errors: {} }
 
 /**
+ * Builds an ActionState for a single server-side authorization/validation
+ * failure that didn't come from zod (e.g. "you can't assign to that user",
+ * "that contact doesn't exist") — keeps the same shape zod errors use so
+ * <FormField> doesn't need a separate code path.
+ */
+export function fieldError(field: string, message: string): ActionState {
+  return { errors: { [field]: [message] }, message }
+}
+
+/**
  * Parses FormData against a zod schema and returns a discriminated result.
  * Every mutating server action follows this same shape so <FormField> can
  * read errors[fieldName] regardless of which entity it's rendering.

@@ -23,7 +23,7 @@ export default async function PendingLeadsPage() {
     <div className="max-w-2xl">
       <div className="mb-6">
         <h2 className="text-lg font-semibold text-ink">Pending leads</h2>
-        <p className="text-sm text-ink-muted">Inbound messages that haven't been classified into a contact yet.</p>
+        <p className="text-sm text-ink-muted">Inbound messages that haven&apos;t been classified into a contact yet.</p>
       </div>
 
       {rows.length === 0 ? (

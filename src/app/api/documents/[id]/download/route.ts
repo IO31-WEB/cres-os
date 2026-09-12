@@ -5,6 +5,7 @@ import { documents } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
 import { canViewDocument } from '@/lib/visibility'
 import { createDownloadUrl } from '@/lib/r2'
+import { logAuditBestEffort } from '@/lib/audit'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser()
@@ -28,6 +29,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   try {
     const signedUrl = await createDownloadUrl(doc.objectKey, doc.fileName)
+    // Note: this logs that a download link was issued, not the signed URL
+    // itself — never write a signed URL (a bearer credential) into the
+    // audit trail.
+    await logAuditBestEffort({
+      user,
+      action: 'document.download',
+      entityType: 'document',
+      entityId: documentId,
+      metadata: { fileName: doc.fileName },
+    })
     return NextResponse.redirect(signedUrl)
   } catch (err) {
     console.error('R2 download URL error', err)

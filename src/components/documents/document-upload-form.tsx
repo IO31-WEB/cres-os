@@ -8,7 +8,7 @@ import { SubmitButton } from '@/components/ui/submit-button'
 import { EMPTY_STATE, type ActionState } from '@/lib/actions/form-state'
 import { DOCUMENT_TYPES, DOCUMENT_TYPE_LABELS } from '@/lib/validations/document'
 import { createDocumentRecord } from '@/lib/actions/documents'
-import { ALLOWED_DOCUMENT_MIME_TYPES, MAX_DOCUMENT_SIZE_BYTES } from '@/lib/r2'
+import { ALLOWED_DOCUMENT_MIME_TYPES, MAX_DOCUMENT_SIZE_BYTES } from '@/lib/document-constraints'
 
 interface DocumentUploadFormProps {
   dealId?: number
@@ -18,9 +18,7 @@ interface DocumentUploadFormProps {
 
 interface UploadedFile {
   fileName: string
-  objectKey: string
-  contentType: string
-  fileSize: number
+  pendingUploadId: number
 }
 
 export function DocumentUploadForm({ dealId, contactId, propertyId }: DocumentUploadFormProps) {
@@ -55,7 +53,14 @@ export function DocumentUploadForm({ dealId, contactId, propertyId }: DocumentUp
       const presignRes = await fetch('/api/documents/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileName: file.name, contentType: file.type, fileSize: file.size }),
+        body: JSON.stringify({
+          fileName: file.name,
+          contentType: file.type,
+          fileSize: file.size,
+          dealId,
+          contactId,
+          propertyId,
+        }),
       })
       const presignData = await presignRes.json()
       if (!presignRes.ok) throw new Error(presignData.error ?? 'Could not prepare upload.')
@@ -67,7 +72,12 @@ export function DocumentUploadForm({ dealId, contactId, propertyId }: DocumentUp
       })
       if (!putRes.ok) throw new Error('Upload to storage failed.')
 
-      setUploaded({ fileName: file.name, objectKey: presignData.key, contentType: file.type, fileSize: file.size })
+      // The object key/content-type/size are never handled by the browser
+      // beyond this point — only the pending-upload id is submitted with
+      // the form, and the server re-derives everything else from the
+      // pending_uploads row it created during presign. See
+      // lib/actions/documents.ts.
+      setUploaded({ fileName: file.name, pendingUploadId: presignData.pendingUploadId })
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed.')
     } finally {
@@ -96,9 +106,7 @@ export function DocumentUploadForm({ dealId, contactId, propertyId }: DocumentUp
       {uploaded && <p className="text-xs text-emerald-600">Uploaded: {uploaded.fileName}</p>}
 
       <input type="hidden" name="fileName" value={uploaded?.fileName ?? ''} />
-      <input type="hidden" name="objectKey" value={uploaded?.objectKey ?? ''} />
-      <input type="hidden" name="contentType" value={uploaded?.contentType ?? ''} />
-      <input type="hidden" name="fileSize" value={uploaded?.fileSize ?? ''} />
+      <input type="hidden" name="pendingUploadId" value={uploaded?.pendingUploadId ?? ''} />
       {dealId && <input type="hidden" name="dealId" value={dealId} />}
       {contactId && <input type="hidden" name="contactId" value={contactId} />}
       {propertyId && <input type="hidden" name="propertyId" value={propertyId} />}

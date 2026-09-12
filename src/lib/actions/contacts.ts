@@ -7,8 +7,10 @@ import { db } from '@/lib/db'
 import { contacts } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
 import { contactSchema } from '@/lib/validations/contact'
-import { parseForm, type ActionState } from '@/lib/actions/form-state'
-import { canViewContact, defaultAssignee } from '@/lib/visibility'
+import { parseForm, fieldError, type ActionState } from '@/lib/actions/form-state'
+import { canViewContact, resolveAssignment } from '@/lib/visibility'
+import { assertCompanyLinkable, assertUserExists } from '@/lib/actions/link-guard'
+import { logAuditBestEffort } from '@/lib/audit'
 
 function orNull(value: string | undefined): string | null {
   return value && value.length > 0 ? value : null
@@ -26,6 +28,18 @@ export async function createContact(_prev: ActionState, formData: FormData): Pro
   if (!parsed.success) return parsed.state
 
   const d = parsed.data
+  const companyId = d.companyId ? Number(d.companyId) : null
+  const companyError = await assertCompanyLinkable(user, companyId)
+  if (companyError) return fieldError('companyId', companyError)
+
+  // Never trust assignedToUserId from the client — resolveAssignment
+  // enforces "agents can only assign to themselves"; owners may assign to
+  // anyone. See lib/visibility.ts.
+  const assignment = resolveAssignment(user, orNull(d.assignedToUserId))
+  if (!assignment.ok) return fieldError('assignedToUserId', assignment.error)
+  const userError = await assertUserExists(assignment.value)
+  if (userError) return fieldError('assignedToUserId', userError)
+
   const [created] = await db
     .insert(contacts)
     .values({
@@ -35,17 +49,16 @@ export async function createContact(_prev: ActionState, formData: FormData): Pro
       phone: orNull(d.phone),
       whatsapp: orNull(d.whatsapp),
       preferredLanguage: d.preferredLanguage,
-      companyId: d.companyId ? Number(d.companyId) : null,
+      companyId,
       contactType: d.contactType,
       leadScore: d.leadScore,
       source: d.source,
-      // Agents default to themselves so their own new contact doesn't
-      // vanish behind the owners-only unassigned rule; owners can
-      // deliberately leave it unassigned.
-      assignedToUserId: defaultAssignee(user, orNull(d.assignedToUserId)),
+      assignedToUserId: assignment.value,
       notes: orNull(d.notes),
     })
     .returning({ id: contacts.id })
+
+  await logAuditBestEffort({ user, action: 'contact.create', entityType: 'contact', entityId: created.id })
 
   revalidatePath('/contacts')
   redirect(`/contacts/${created.id}`)
@@ -57,12 +70,21 @@ export async function updateContact(
   formData: FormData
 ): Promise<ActionState> {
   const user = await requireUser()
-  await assertCanEditContact(user, contactId)
+  const existing = await assertCanEditContact(user, contactId)
 
   const parsed = parseForm(contactSchema, formData)
   if (!parsed.success) return parsed.state
 
   const d = parsed.data
+  const companyId = d.companyId ? Number(d.companyId) : null
+  const companyError = await assertCompanyLinkable(user, companyId)
+  if (companyError) return fieldError('companyId', companyError)
+
+  const assignment = resolveAssignment(user, orNull(d.assignedToUserId), existing.assignedToUserId)
+  if (!assignment.ok) return fieldError('assignedToUserId', assignment.error)
+  const userError = await assertUserExists(assignment.value)
+  if (userError) return fieldError('assignedToUserId', userError)
+
   await db
     .update(contacts)
     .set({
@@ -72,11 +94,11 @@ export async function updateContact(
       phone: orNull(d.phone),
       whatsapp: orNull(d.whatsapp),
       preferredLanguage: d.preferredLanguage,
-      companyId: d.companyId ? Number(d.companyId) : null,
+      companyId,
       contactType: d.contactType,
       leadScore: d.leadScore,
       source: d.source,
-      assignedToUserId: orNull(d.assignedToUserId),
+      assignedToUserId: assignment.value,
       notes: orNull(d.notes),
       updatedAt: new Date(),
     })
@@ -92,6 +114,7 @@ export async function deleteContact(contactId: number): Promise<void> {
   await assertCanEditContact(user, contactId)
 
   await db.delete(contacts).where(eq(contacts.id, contactId))
+  await logAuditBestEffort({ user, action: 'contact.delete', entityType: 'contact', entityId: contactId })
   revalidatePath('/contacts')
   redirect('/contacts')
 }

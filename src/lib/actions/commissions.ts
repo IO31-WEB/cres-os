@@ -9,6 +9,7 @@ import { requireUser } from '@/lib/auth'
 import { commissionSchema } from '@/lib/validations/commission'
 import { parseForm, type ActionState } from '@/lib/actions/form-state'
 import { canViewDeal, canViewCommission } from '@/lib/visibility'
+import { logAuditBestEffort } from '@/lib/audit'
 
 export async function createCommission(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireUser()
@@ -20,16 +21,21 @@ export async function createCommission(_prev: ActionState, formData: FormData): 
   const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1)
   if (!deal || !(await canViewDeal(user, deal))) notFound()
 
-  await db.insert(commissions).values({
-    dealId,
-    expectedAmount: Number(d.expectedAmount),
-    invoicedAmount: d.invoicedAmount ? Number(d.invoicedAmount) : null,
-    collectedAmount: d.collectedAmount ? Number(d.collectedAmount) : null,
-    status: d.status,
-    dueDate: d.dueDate ? new Date(d.dueDate) : null,
-    invoicedAt: d.status === 'invoiced' || d.status === 'overdue' ? new Date() : null,
-    collectedAt: d.status === 'collected' ? new Date() : null,
-  })
+  const [created] = await db
+    .insert(commissions)
+    .values({
+      dealId,
+      expectedAmount: Number(d.expectedAmount),
+      invoicedAmount: d.invoicedAmount ? Number(d.invoicedAmount) : null,
+      collectedAmount: d.collectedAmount ? Number(d.collectedAmount) : null,
+      status: d.status,
+      dueDate: d.dueDate ? new Date(d.dueDate) : null,
+      invoicedAt: d.status === 'invoiced' || d.status === 'overdue' ? new Date() : null,
+      collectedAt: d.status === 'collected' ? new Date() : null,
+    })
+    .returning({ id: commissions.id })
+
+  await logAuditBestEffort({ user, action: 'commission.create', entityType: 'commission', entityId: created.id, metadata: { dealId } })
 
   revalidatePath('/commissions')
   revalidatePath(`/deals/${dealId}`)
@@ -61,6 +67,14 @@ export async function updateCommission(
     })
     .where(eq(commissions.id, commissionId))
 
+  await logAuditBestEffort({
+    user,
+    action: 'commission.update',
+    entityType: 'commission',
+    entityId: commissionId,
+    metadata: { status: d.status },
+  })
+
   revalidatePath('/commissions')
   revalidatePath(`/deals/${d.dealId}`)
   redirect('/commissions')
@@ -72,6 +86,7 @@ export async function deleteCommission(commissionId: number, dealId: number): Pr
   if (!existing || !(await canViewCommission(user, existing))) notFound()
 
   await db.delete(commissions).where(eq(commissions.id, commissionId))
+  await logAuditBestEffort({ user, action: 'commission.delete', entityType: 'commission', entityId: commissionId, metadata: { dealId } })
   revalidatePath('/commissions')
   revalidatePath(`/deals/${dealId}`)
   redirect('/commissions')

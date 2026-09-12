@@ -7,9 +7,11 @@ import { db } from '@/lib/db'
 import { properties } from '@/lib/db/schema'
 import { requireUser } from '@/lib/auth'
 import { propertySchema } from '@/lib/validations/property'
-import { parseForm, type ActionState } from '@/lib/actions/form-state'
+import { parseForm, fieldError, type ActionState } from '@/lib/actions/form-state'
 import { geocodeAddress } from '@/lib/data-sources/geocode'
-import { canViewProperty, defaultAssignee } from '@/lib/visibility'
+import { canViewProperty, resolveAssignment } from '@/lib/visibility'
+import { assertContactLinkable, assertUserExists } from '@/lib/actions/link-guard'
+import { logAuditBestEffort } from '@/lib/audit'
 
 function orNull(value: string | undefined): string | null {
   return value && value.length > 0 ? value : null
@@ -27,6 +29,14 @@ export async function createProperty(_prev: ActionState, formData: FormData): Pr
   if (!parsed.success) return parsed.state
 
   const d = parsed.data
+  const ownerContactId = d.ownerContactId ? Number(d.ownerContactId) : null
+  const contactError = await assertContactLinkable(user, ownerContactId)
+  if (contactError) return fieldError('ownerContactId', contactError)
+
+  const assignment = resolveAssignment(user, orNull(d.assignedToUserId))
+  if (!assignment.ok) return fieldError('assignedToUserId', assignment.error)
+  const userError = await assertUserExists(assignment.value)
+  if (userError) return fieldError('assignedToUserId', userError)
 
   // Best-effort geocode so the property page can show a map pin and the
   // scorecard launcher can skip re-typing the address. A failed geocode
@@ -44,15 +54,15 @@ export async function createProperty(_prev: ActionState, formData: FormData): Pr
       propertyType: d.propertyType,
       defaultBusinessProfile: d.defaultBusinessProfile,
       listingStatus: d.listingStatus,
-      ownerContactId: d.ownerContactId ? Number(d.ownerContactId) : null,
-      // Agents default to themselves so their own new property doesn't
-      // vanish behind the owners-only unassigned rule.
-      assignedToUserId: defaultAssignee(user, orNull(d.assignedToUserId)),
+      ownerContactId,
+      assignedToUserId: assignment.value,
       sqft: d.sqft ? Number(d.sqft) : null,
       notes: orNull(d.notes),
       createdByUserId: user.id,
     })
     .returning({ id: properties.id })
+
+  await logAuditBestEffort({ user, action: 'property.create', entityType: 'property', entityId: created.id })
 
   revalidatePath('/properties')
   redirect(`/properties/${created.id}`)
@@ -70,6 +80,14 @@ export async function updateProperty(
   if (!parsed.success) return parsed.state
 
   const d = parsed.data
+  const ownerContactId = d.ownerContactId ? Number(d.ownerContactId) : null
+  const contactError = await assertContactLinkable(user, ownerContactId)
+  if (contactError) return fieldError('ownerContactId', contactError)
+
+  const assignment = resolveAssignment(user, orNull(d.assignedToUserId), existing.assignedToUserId)
+  if (!assignment.ok) return fieldError('assignedToUserId', assignment.error)
+  const userError = await assertUserExists(assignment.value)
+  if (userError) return fieldError('assignedToUserId', userError)
 
   // Only re-geocode if the address text actually changed — avoids burning
   // a geocode call on every unrelated edit (e.g. just updating notes).
@@ -86,8 +104,8 @@ export async function updateProperty(
       propertyType: d.propertyType,
       defaultBusinessProfile: d.defaultBusinessProfile,
       listingStatus: d.listingStatus,
-      ownerContactId: d.ownerContactId ? Number(d.ownerContactId) : null,
-      assignedToUserId: orNull(d.assignedToUserId),
+      ownerContactId,
+      assignedToUserId: assignment.value,
       sqft: d.sqft ? Number(d.sqft) : null,
       notes: orNull(d.notes),
       updatedAt: new Date(),
@@ -104,6 +122,7 @@ export async function deleteProperty(propertyId: number): Promise<void> {
   await assertCanEditProperty(user, propertyId)
 
   await db.delete(properties).where(eq(properties.id, propertyId))
+  await logAuditBestEffort({ user, action: 'property.delete', entityType: 'property', entityId: propertyId })
   revalidatePath('/properties')
   redirect('/properties')
 }
